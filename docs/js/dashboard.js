@@ -102,7 +102,7 @@
   async function load() {
     try {
       const data = await API.dashboard();
-      const todayDate = new Date();
+      const todayDate = new Date(data.today + "T00:00:00");
       todayLabel.textContent = todayDate.toLocaleDateString(undefined, {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
       });
