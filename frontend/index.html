@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Birthday Tracker — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="brand">
+        <span class="brand__mark"></span>
+        <div>
+          <h1 class="brand__title">Birthday Tracker</h1>
+          <span class="brand__sub">Team Engagement</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Dashboard</a>
+        <a href="calendar.html">Calendar</a>
+        <a href="members.html">Members</a>
+        <a href="export.html">Export</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <h2 class="page__title">Dashboard</h2>
+    <p class="page__lede" id="todayLabel">Loading…</p>
+
+    <section class="section" aria-labelledby="todayHeader">
+      <div class="section__header">
+        <h3 class="section__title" id="todayHeader">🎂  Today's Birthdays</h3>
+        <span class="section__count" id="todayCount"></span>
+      </div>
+      <div id="todayContainer" class="is-loading">Loading…</div>
+    </section>
+
+    <section class="section" aria-labelledby="upcomingHeader">
+      <div class="section__header">
+        <h3 class="section__title" id="upcomingHeader">📅  Upcoming · Next 7 Days</h3>
+        <span class="section__count" id="upcomingCount"></span>
+      </div>
+      <div id="upcomingContainer" class="is-loading">Loading…</div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    Internal team tool · Data stored privately on the backend
+  </footer>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/dashboard.js"></script>
+</body>
+</html>

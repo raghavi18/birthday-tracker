@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Birthday Tracker — Members</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="brand">
+        <span class="brand__mark"></span>
+        <div>
+          <h1 class="brand__title">Birthday Tracker</h1>
+          <span class="brand__sub">Team Engagement</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Dashboard</a>
+        <a href="calendar.html">Calendar</a>
+        <a href="members.html">Members</a>
+        <a href="export.html">Export</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <h2 class="page__title">Members</h2>
+    <p class="page__lede">Add new colleagues to the tracker, or edit existing entries.</p>
+
+    <!-- Form section -->
+    <section class="section" aria-labelledby="formHeader">
+      <div class="section__header">
+        <h3 class="section__title" id="formHeader"><span id="formMode">Add a new member</span></h3>
+      </div>
+
+      <div class="card">
+        <div id="formBanner" class="banner"></div>
+
+        <form id="memberForm" class="form" novalidate>
+          <input type="hidden" id="memberId" />
+
+          <div class="form__field">
+            <label class="form__label" for="name">Full Name <span class="req">*</span></label>
+            <input type="text" id="name" class="form__input" maxlength="60" autocomplete="name" />
+            <div class="form__error" id="err_name"></div>
+          </div>
+
+          <div class="form__field">
+            <label class="form__label" for="role">Role <span class="req">*</span></label>
+            <input type="text" id="role" class="form__input" list="roleSuggestions" maxlength="80" />
+            <datalist id="roleSuggestions">
+              <option value="Analyst" />
+              <option value="Senior Analyst" />
+              <option value="Consultant" />
+              <option value="Senior Consultant" />
+              <option value="Engagement Manager" />
+              <option value="Manager" />
+              <option value="Associate Partner" />
+              <option value="Partner" />
+              <option value="Senior Partner" />
+              <option value="Director" />
+            </datalist>
+            <div class="form__error" id="err_role"></div>
+          </div>
+
+          <div class="form__field">
+            <label class="form__label">Birthday <span class="req">*</span></label>
+            <div class="form__row-bday">
+              <select id="birthMonth" class="form__select">
+                <option value="">Month</option>
+              </select>
+              <select id="birthDay" class="form__select" disabled>
+                <option value="">Day</option>
+              </select>
+            </div>
+            <div class="form__error" id="err_birthday"></div>
+          </div>
+
+          <div class="form__field">
+            <label class="form__label" for="email">Email <span class="req">*</span></label>
+            <input type="email" id="email" class="form__input" autocomplete="email" />
+            <div class="form__error" id="err_email"></div>
+          </div>
+
+          <div class="form__actions">
+            <button type="submit" class="btn" id="submitBtn">Save Member</button>
+            <button type="button" class="btn btn--secondary" id="resetBtn">Reset Form</button>
+            <span class="form__hint" id="formHint">No year is collected — only month and day.</span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Table section -->
+    <section class="section" aria-labelledby="tableHeader">
+      <div class="section__header">
+        <h3 class="section__title" id="tableHeader">Existing Members</h3>
+        <span class="section__count" id="memberCount"></span>
+      </div>
+
+      <div class="toolbar">
+        <input type="search" id="searchInput" class="form__input" placeholder="Search by name, role, or email…" />
+      </div>
+
+      <div id="tableContainer" class="is-loading">Loading members…</div>
+    </section>
+  </main>
+
+  <!-- Delete confirmation modal -->
+  <div class="modal-overlay" id="deleteModal" role="dialog" aria-modal="true" aria-labelledby="deleteTitle">
+    <div class="modal">
+      <h3 id="deleteTitle">Confirm deletion</h3>
+      <p id="deleteMessage">Are you sure you want to remove this member?</p>
+      <div class="modal__actions">
+        <button class="btn btn--secondary" id="cancelDelete">Cancel</button>
+        <button class="btn btn--danger" id="confirmDelete">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    Internal team tool · Data stored privately on the backend
+  </footer>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/members.js"></script>
+</body>
+</html>

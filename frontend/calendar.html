@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Team Birthday Tracker — Calendar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <div class="brand">
+        <span class="brand__mark"></span>
+        <div>
+          <h1 class="brand__title">Birthday Tracker</h1>
+          <span class="brand__sub">Team Engagement</span>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Primary">
+        <a href="index.html">Dashboard</a>
+        <a href="calendar.html">Calendar</a>
+        <a href="members.html">Members</a>
+        <a href="export.html">Export</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <h2 class="page__title">Calendar</h2>
+    <p class="page__lede">A monthly view of every birthday on the team. Click any highlighted date for details.</p>
+
+    <div class="calendar-controls">
+      <button class="btn btn--secondary btn--small" id="prevMonth" aria-label="Previous month">← Previous</button>
+      <h3 class="calendar-controls__title" id="monthLabel">—</h3>
+      <button class="btn btn--secondary btn--small" id="nextMonth" aria-label="Next month">Next →</button>
+    </div>
+
+    <div id="calendarGrid" class="calendar-grid is-loading">Loading…</div>
+  </main>
+
+  <footer class="app-footer">
+    Internal team tool · Data stored privately on the backend
+  </footer>
+
+  <script src="js/config.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/calendar.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "exported_at": "2026-04-27T21:15:22.127056Z",
+  "members": [
+    {
+      "id": 1,
+      "name": "Raghavi Chalamalasetti",
+      "role": "Junior Analyst",
+      "birthday_month": 10,
+      "birthday_day": 18,
+      "email": "raghavi_chalamalasetti@mckinsey.com",
+      "created_at": "2026-04-27T21:15:09.292239Z",
+      "updated_at": "2026-04-27T21:15:22.124822Z",
+      "deleted_at": null
+    }
+  ]
+}
