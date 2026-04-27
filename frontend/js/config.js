@@ -12,6 +12,6 @@ window.APP_CONFIG = {
       return "http://localhost:5050";
     }
     // CHANGE THIS to your deployed backend URL when you publish to GitHub Pages.
-    return "https://YOUR-BACKEND.onrender.com";
+    return "https://birthday-api-skh3.onrender.com";
   })(),
 };
