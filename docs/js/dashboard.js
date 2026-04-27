@@ -22,7 +22,7 @@
       `Best,`,
       `The Team`,
     ].join("\n");
-    return `mailto:${encodeURIComponent(member.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    return `mailto:${encodeURIComponent(member.email)}?subject=${encodeURIComponent(subject)}`;
   }
 
   function renderTodaysBirthdays(list) {
