@@ -25,13 +25,13 @@ LATEST_BACKUP = os.path.join(BACKUP_DIR, "latest.json")
 
 # Use PostgreSQL when DATABASE_URL is provided; fall back to SQLite for local dev.
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-if DATABASE_URL.startswith("postgres://"):  # Render/Heroku use this prefix; psycopg2 needs postgresql://
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 _IS_PG = bool(DATABASE_URL)
 
 if _IS_PG:
-    import psycopg2
-    import psycopg2.extras
+    # pg8000 is a pure-Python PostgreSQL driver — no compiled extensions, works on any Python version.
+    import pg8000.dbapi as _pg8000
+    from urllib.parse import urlparse as _urlparse
+    import ssl as _ssl
 else:
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
@@ -56,6 +56,42 @@ CORS(app, origins=[
 # Database abstraction — identical call sites for SQLite and PostgreSQL.
 # ---------------------------------------------------------------------------
 
+def _pg_connect():
+    """Open a pg8000 connection from DATABASE_URL, adding SSL for cloud hosts."""
+    p = _urlparse(DATABASE_URL)
+    kwargs = {
+        "user": p.username,
+        "password": p.password,
+        "host": p.hostname,
+        "port": p.port or 5432,
+        "database": p.path.lstrip("/"),
+    }
+    if p.hostname and p.hostname not in ("localhost", "127.0.0.1"):
+        kwargs["ssl_context"] = _ssl.create_default_context()
+    return _pg8000.connect(**kwargs)
+
+
+class _PGCursor:
+    """Wraps a pg8000 cursor so fetchall/fetchone return dicts instead of tuples."""
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def _cols(self):
+        return [d[0] for d in (self._cur.description or [])]
+
+    def fetchall(self):
+        rows = self._cur.fetchall() or []
+        cols = self._cols()
+        return [dict(zip(cols, row)) for row in rows]
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        if row is None:
+            return None
+        return dict(zip(self._cols(), row))
+
+
 class _DB:
     """Thin wrapper normalizing SQLite and PostgreSQL for the same call pattern."""
 
@@ -66,18 +102,19 @@ class _DB:
     def execute(self, sql: str, params=()):
         """Run sql with params; return a cursor with .fetchall() / .fetchone()."""
         if self._is_pg:
-            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(sql.replace("?", "%s"), params or ())
+            cur = self._conn.cursor()
+            cur.execute(sql.replace("?", "%s"), params or None)
+            return _PGCursor(cur)
         else:
-            cur = self._conn.execute(sql, params or ())
-        return cur
+            return self._conn.execute(sql, params or ())
 
     def insert_get_id(self, sql: str, params=()) -> int:
         """Execute INSERT and return the new row's primary key."""
         if self._is_pg:
-            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute((sql + " RETURNING id").replace("?", "%s"), params or ())
-            return cur.fetchone()["id"]
+            cur = self._conn.cursor()
+            cur.execute((sql + " RETURNING id").replace("?", "%s"), params or None)
+            row = cur.fetchone()
+            return row[0]  # RETURNING id gives a single-element tuple
         else:
             cur = self._conn.execute(sql, params or ())
             return cur.lastrowid
@@ -86,7 +123,7 @@ class _DB:
 @contextmanager
 def get_db():
     if _IS_PG:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = _pg_connect()
         db = _DB(conn, is_pg=True)
         try:
             yield db
