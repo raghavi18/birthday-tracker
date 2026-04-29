@@ -67,7 +67,11 @@ def _pg_connect():
         "database": p.path.lstrip("/"),
     }
     if p.hostname and p.hostname not in ("localhost", "127.0.0.1"):
-        kwargs["ssl_context"] = _ssl.create_default_context()
+        # Supabase pooler uses a self-signed cert chain; disable verification while keeping encryption.
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        kwargs["ssl_context"] = ctx
     return _pg8000.connect(**kwargs)
 
 
