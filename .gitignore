@@ -1,0 +1,29 @@
+# Python virtual environments
+bdaytracker/
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# SQLite database (local dev only — production uses PostgreSQL)
+backend/birthdays.db
+backend/birthdays.db.old
+backend/birthdays.db.corrupt
+
+# JSON backup snapshots contain PII (member emails); keep out of version control.
+backend/backups/
+!backend/backups/.gitkeep
+
+# Environment variable files (never commit secrets)
+.env
+.env.local
+.env.production.local
+
+# macOS / editor noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/

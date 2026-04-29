@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: birthday-tracker-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 30
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # Set this manually in the Render dashboard to your Supabase connection string.
+      - key: FRONTEND_URL
+        value: https://raghavi18.github.io   # The GitHub Pages origin allowed by CORS.
+      - key: PYTHON_VERSION
+        value: 3.11.0

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Redirecting…</title>
+  <script>
+    // GitHub Pages serves this file for any unmatched path under the site root.
+    // Redirect to the app's main page, preserving the repo-name prefix.
+    var repo = window.location.pathname.split('/')[1]; // e.g. "birthday-tracker"
+    window.location.replace('/' + repo + '/');
+  </script>
+</head>
+<body>
+  <p>Redirecting to <a href="./index.html">the app</a>…</p>
+</body>
+</html>

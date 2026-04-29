@@ -1,6 +1,6 @@
 """
 Team Birthday Tracker - Flask Backend
-Lightweight REST API backed by SQLite, with JSON auto-backup and CSV/Excel export.
+SQLite (local dev, no DATABASE_URL) or PostgreSQL (production, DATABASE_URL set).
 """
 import os
 import re
@@ -8,138 +8,204 @@ import csv
 import io
 import json
 import sqlite3
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from contextlib import contextmanager
 
-from flask import Flask, request, jsonify, send_file, abort
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from openpyxl import Workbook
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "birthdays.db"))
-BACKUP_DIR = os.environ.get("BACKUP_DIR", os.path.join(BASE_DIR, "backups"))
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+DB_PATH     = os.environ.get("DB_PATH",    os.path.join(BASE_DIR, "birthdays.db"))
+BACKUP_DIR  = os.environ.get("BACKUP_DIR", os.path.join(BASE_DIR, "backups"))
 LATEST_BACKUP = os.path.join(BACKUP_DIR, "latest.json")
 
-os.makedirs(BACKUP_DIR, exist_ok=True)
+# Use PostgreSQL when DATABASE_URL is provided; fall back to SQLite for local dev.
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if DATABASE_URL.startswith("postgres://"):  # Render/Heroku use this prefix; psycopg2 needs postgresql://
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+_IS_PG = bool(DATABASE_URL)
+
+if _IS_PG:
+    import psycopg2
+    import psycopg2.extras
+else:
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# ORDER BY clause differs: PostgreSQL has no COLLATE NOCASE.
+_NAME_ORDER = "LOWER(name)" if _IS_PG else "name COLLATE NOCASE"
 
 app = Flask(__name__)
-CORS(app)  # Permissive CORS - the frontend is on GH Pages, backend on Render/Railway.
+
+# Explicitly allow the GitHub Pages frontend (and localhost for local dev).
+_FRONTEND_ORIGIN = os.environ.get("FRONTEND_URL", "https://raghavi18.github.io")
+CORS(app, origins=[
+    _FRONTEND_ORIGIN,
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5050",
+    "http://127.0.0.1:5050",
+    "null",  # file:// origin when opening HTML files directly during local dev
+])
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database abstraction — identical call sites for SQLite and PostgreSQL.
 # ---------------------------------------------------------------------------
+
+class _DB:
+    """Thin wrapper normalizing SQLite and PostgreSQL for the same call pattern."""
+
+    def __init__(self, raw_conn, is_pg: bool):
+        self._conn = raw_conn
+        self._is_pg = is_pg
+
+    def execute(self, sql: str, params=()):
+        """Run sql with params; return a cursor with .fetchall() / .fetchone()."""
+        if self._is_pg:
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql.replace("?", "%s"), params or ())
+        else:
+            cur = self._conn.execute(sql, params or ())
+        return cur
+
+    def insert_get_id(self, sql: str, params=()) -> int:
+        """Execute INSERT and return the new row's primary key."""
+        if self._is_pg:
+            cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute((sql + " RETURNING id").replace("?", "%s"), params or ())
+            return cur.fetchone()["id"]
+        else:
+            cur = self._conn.execute(sql, params or ())
+            return cur.lastrowid
+
+
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    if _IS_PG:
+        conn = psycopg2.connect(DATABASE_URL)
+        db = _DB(conn, is_pg=True)
+        try:
+            yield db
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        db = _DB(conn, is_pg=False)
+        try:
+            yield db
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Schema SQL (auto-increment syntax differs between PostgreSQL and SQLite)
+# ---------------------------------------------------------------------------
+
+_SCHEMA_PG = """
+    CREATE TABLE IF NOT EXISTS members (
+        id             BIGSERIAL PRIMARY KEY,
+        name           TEXT NOT NULL,
+        role           TEXT NOT NULL,
+        birthday_month INTEGER NOT NULL CHECK(birthday_month BETWEEN 1 AND 12),
+        birthday_day   INTEGER NOT NULL CHECK(birthday_day   BETWEEN 1 AND 31),
+        email          TEXT NOT NULL UNIQUE,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        deleted_at     TEXT
+    )
+"""
+
+_SCHEMA_SQLITE = """
+    CREATE TABLE IF NOT EXISTS members (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        name           TEXT NOT NULL,
+        role           TEXT NOT NULL,
+        birthday_month INTEGER NOT NULL CHECK(birthday_month BETWEEN 1 AND 12),
+        birthday_day   INTEGER NOT NULL CHECK(birthday_day   BETWEEN 1 AND 31),
+        email          TEXT NOT NULL UNIQUE,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        deleted_at     TEXT
+    )
+"""
+
+_SCHEMA_SQLITE_BARE = """
+    CREATE TABLE IF NOT EXISTS members (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        name           TEXT NOT NULL,
+        role           TEXT NOT NULL,
+        birthday_month INTEGER NOT NULL,
+        birthday_day   INTEGER NOT NULL,
+        email          TEXT NOT NULL UNIQUE,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        deleted_at     TEXT
+    )
+"""
 
 
 def init_db():
-    """Initialize schema. If the DB file is missing/corrupt, attempt restore from backup."""
+    """Initialize schema. SQLite-only: attempts backup restore on corruption."""
     try:
-        with get_db() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS members (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    birthday_month INTEGER NOT NULL CHECK(birthday_month BETWEEN 1 AND 12),
-                    birthday_day   INTEGER NOT NULL CHECK(birthday_day   BETWEEN 1 AND 31),
-                    email TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    deleted_at TEXT
-                )
-                """
-            )
-    except sqlite3.DatabaseError as e:
-        app.logger.warning(f"Database error on init ({e}); attempting backup restore.")
+        with get_db() as db:
+            db.execute(_SCHEMA_PG if _IS_PG else _SCHEMA_SQLITE)
+    except Exception as e:
+        if _IS_PG:
+            app.logger.error(f"PostgreSQL init error: {e}")
+            raise
+        app.logger.warning(f"SQLite init error ({e}); attempting backup restore.")
         if os.path.exists(LATEST_BACKUP):
             restore_from_backup()
         else:
-            # Nuke and recreate.
             if os.path.exists(DB_PATH):
                 os.rename(DB_PATH, DB_PATH + ".corrupt")
-            with get_db() as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS members (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL,
-                        role TEXT NOT NULL,
-                        birthday_month INTEGER NOT NULL,
-                        birthday_day   INTEGER NOT NULL,
-                        email TEXT NOT NULL UNIQUE,
-                        created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL,
-                        deleted_at TEXT
-                    )
-                    """
-                )
+            with get_db() as db:
+                db.execute(_SCHEMA_SQLITE_BARE)
 
 
 def restore_from_backup():
-    """Recreate the DB from the latest JSON backup."""
+    """Rebuild SQLite DB from latest JSON backup (SQLite only; PG data persists natively)."""
+    if _IS_PG:
+        return
     if os.path.exists(DB_PATH):
         os.rename(DB_PATH, DB_PATH + ".corrupt")
     with open(LATEST_BACKUP, "r", encoding="utf-8") as f:
         data = json.load(f)
-    with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE members (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                role TEXT NOT NULL,
-                birthday_month INTEGER NOT NULL,
-                birthday_day   INTEGER NOT NULL,
-                email TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                deleted_at TEXT
-            )
-            """
-        )
+    with get_db() as db:
+        db.execute(_SCHEMA_SQLITE)
         for row in data.get("members", []):
-            conn.execute(
-                """
-                INSERT INTO members (id, name, role, birthday_month, birthday_day,
-                                     email, created_at, updated_at, deleted_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    row.get("id"),
-                    row["name"],
-                    row["role"],
-                    row["birthday_month"],
-                    row["birthday_day"],
-                    row["email"],
-                    row["created_at"],
-                    row["updated_at"],
-                    row.get("deleted_at"),
-                ),
+            db.execute(
+                """INSERT INTO members (id, name, role, birthday_month, birthday_day,
+                                        email, created_at, updated_at, deleted_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row.get("id"), row["name"], row["role"],
+                 row["birthday_month"], row["birthday_day"], row["email"],
+                 row["created_at"], row["updated_at"], row.get("deleted_at")),
             )
-    app.logger.info("Database restored from backup.")
+    app.logger.info("SQLite database restored from backup.")
 
 
 def write_backup():
-    """Write a timestamped JSON snapshot + update latest.json."""
-    with get_db() as conn:
-        rows = conn.execute("SELECT * FROM members").fetchall()
+    """Write timestamped JSON snapshot to local backups/ (SQLite only).
+    Skipped in PostgreSQL mode — the DB itself is persistent on the cloud provider."""
+    if _IS_PG:
+        return
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM members").fetchall()
     payload = {
         "exported_at": datetime.utcnow().isoformat() + "Z",
         "members": [dict(r) for r in rows],
@@ -169,7 +235,6 @@ def validate_member_payload(p, *, partial=False):
     errors = {}
     cleaned = {}
 
-    # Name
     if "name" in p or not partial:
         name = (p.get("name") or "").strip()
         if not name:
@@ -181,7 +246,6 @@ def validate_member_payload(p, *, partial=False):
         else:
             cleaned["name"] = name
 
-    # Role
     if "role" in p or not partial:
         role = (p.get("role") or "").strip()
         if not role:
@@ -191,7 +255,6 @@ def validate_member_payload(p, *, partial=False):
         else:
             cleaned["role"] = role
 
-    # Birthday
     if "birthday_month" in p or "birthday_day" in p or not partial:
         try:
             m = int(p.get("birthday_month"))
@@ -207,7 +270,6 @@ def validate_member_payload(p, *, partial=False):
                 cleaned["birthday_month"] = m
                 cleaned["birthday_day"] = d
 
-    # Email
     if "email" in p or not partial:
         email = (p.get("email") or "").strip().lower()
         if not email:
@@ -238,14 +300,15 @@ def row_to_dict(row):
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z"})
+    return jsonify({"status": "ok", "time": datetime.utcnow().isoformat() + "Z",
+                    "db": "postgresql" if _IS_PG else "sqlite"})
 
 
 @app.get("/api/members")
 def list_members():
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM members WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE"
+    with get_db() as db:
+        rows = db.execute(
+            f"SELECT * FROM members WHERE deleted_at IS NULL ORDER BY {_NAME_ORDER}"
         ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -259,9 +322,8 @@ def create_member():
 
     confirmed = bool(payload.get("confirm_duplicate"))
 
-    with get_db() as conn:
-        # Hard duplicate: email exists (active).
-        existing_email = conn.execute(
+    with get_db() as db:
+        existing_email = db.execute(
             "SELECT id, name FROM members WHERE email = ? AND deleted_at IS NULL",
             (cleaned["email"],),
         ).fetchone()
@@ -275,16 +337,13 @@ def create_member():
                 409,
             )
 
-        # Soft duplicate: same name + same birthday, different email.
         if not confirmed:
-            soft = conn.execute(
-                """
-                SELECT id, name, email FROM members
-                WHERE LOWER(name) = LOWER(?)
-                  AND birthday_month = ?
-                  AND birthday_day   = ?
-                  AND deleted_at IS NULL
-                """,
+            soft = db.execute(
+                """SELECT id, name, email FROM members
+                   WHERE LOWER(name) = LOWER(?)
+                     AND birthday_month = ?
+                     AND birthday_day   = ?
+                     AND deleted_at IS NULL""",
                 (cleaned["name"], cleaned["birthday_month"], cleaned["birthday_day"]),
             ).fetchone()
             if soft:
@@ -300,23 +359,13 @@ def create_member():
                 )
 
         now = datetime.utcnow().isoformat() + "Z"
-        cur = conn.execute(
-            """
-            INSERT INTO members (name, role, birthday_month, birthday_day, email, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                cleaned["name"],
-                cleaned["role"],
-                cleaned["birthday_month"],
-                cleaned["birthday_day"],
-                cleaned["email"],
-                now,
-                now,
-            ),
+        new_id = db.insert_get_id(
+            """INSERT INTO members (name, role, birthday_month, birthday_day, email, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (cleaned["name"], cleaned["role"], cleaned["birthday_month"],
+             cleaned["birthday_day"], cleaned["email"], now, now),
         )
-        new_id = cur.lastrowid
-        row = conn.execute("SELECT * FROM members WHERE id = ?", (new_id,)).fetchone()
+        row = db.execute("SELECT * FROM members WHERE id = ?", (new_id,)).fetchone()
 
     write_backup()
     return jsonify(row_to_dict(row)), 201
@@ -329,42 +378,29 @@ def update_member(member_id):
     if errors:
         return jsonify({"errors": errors}), 400
 
-    with get_db() as conn:
-        existing = conn.execute(
+    with get_db() as db:
+        existing = db.execute(
             "SELECT * FROM members WHERE id = ? AND deleted_at IS NULL", (member_id,)
         ).fetchone()
         if not existing:
             return jsonify({"errors": {"_": "Member not found."}}), 404
 
-        # Email conflict check (with someone else)
-        conflict = conn.execute(
+        conflict = db.execute(
             "SELECT id FROM members WHERE email = ? AND id != ? AND deleted_at IS NULL",
             (cleaned["email"], member_id),
         ).fetchone()
         if conflict:
-            return (
-                jsonify({"errors": {"email": "Another member already uses this email."}}),
-                409,
-            )
+            return jsonify({"errors": {"email": "Another member already uses this email."}}), 409
 
         now = datetime.utcnow().isoformat() + "Z"
-        conn.execute(
-            """
-            UPDATE members
-               SET name = ?, role = ?, birthday_month = ?, birthday_day = ?, email = ?, updated_at = ?
-             WHERE id = ?
-            """,
-            (
-                cleaned["name"],
-                cleaned["role"],
-                cleaned["birthday_month"],
-                cleaned["birthday_day"],
-                cleaned["email"],
-                now,
-                member_id,
-            ),
+        db.execute(
+            """UPDATE members
+                  SET name = ?, role = ?, birthday_month = ?, birthday_day = ?, email = ?, updated_at = ?
+                WHERE id = ?""",
+            (cleaned["name"], cleaned["role"], cleaned["birthday_month"],
+             cleaned["birthday_day"], cleaned["email"], now, member_id),
         )
-        row = conn.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
+        row = db.execute("SELECT * FROM members WHERE id = ?", (member_id,)).fetchone()
 
     write_backup()
     return jsonify(row_to_dict(row))
@@ -372,33 +408,29 @@ def update_member(member_id):
 
 @app.delete("/api/members/<int:member_id>")
 def delete_member(member_id):
-    """Soft delete: sets deleted_at timestamp."""
-    with get_db() as conn:
-        existing = conn.execute(
+    with get_db() as db:
+        existing = db.execute(
             "SELECT id FROM members WHERE id = ? AND deleted_at IS NULL", (member_id,)
         ).fetchone()
         if not existing:
             return jsonify({"errors": {"_": "Member not found."}}), 404
         now = datetime.utcnow().isoformat() + "Z"
-        conn.execute("UPDATE members SET deleted_at = ? WHERE id = ?", (now, member_id))
+        db.execute("UPDATE members SET deleted_at = ? WHERE id = ?", (now, member_id))
 
     write_backup()
     return jsonify({"deleted": True, "id": member_id})
 
 
 # ---------------------------------------------------------------------------
-# Dashboard helpers - today + upcoming
+# Dashboard
 # ---------------------------------------------------------------------------
 @app.get("/api/dashboard")
 def dashboard():
-    """Returns today's birthdays and upcoming birthdays in next 7 days."""
     today = date.today()
     is_leap = (today.year % 4 == 0 and today.year % 100 != 0) or (today.year % 400 == 0)
 
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM members WHERE deleted_at IS NULL"
-        ).fetchall()
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM members WHERE deleted_at IS NULL").fetchall()
 
     todays = []
     upcoming = []
@@ -406,7 +438,6 @@ def dashboard():
     for r in rows:
         m = r["birthday_month"]
         d = r["birthday_day"]
-        # Leap-day handling: Feb 29 birthdays get observed on Feb 28 in non-leap years.
         observed_m, observed_d = m, d
         leap_note = False
         if m == 2 and d == 29 and not is_leap:
@@ -419,7 +450,6 @@ def dashboard():
             todays.append(entry)
             continue
 
-        # Compute days until next observed birthday.
         try:
             this_year_birthday = date(today.year, observed_m, observed_d)
         except ValueError:
@@ -451,9 +481,10 @@ def dashboard():
 # Export
 # ---------------------------------------------------------------------------
 def get_active_rows():
-    with get_db() as conn:
-        return conn.execute(
-            "SELECT * FROM members WHERE deleted_at IS NULL ORDER BY birthday_month, birthday_day, name COLLATE NOCASE"
+    order = f"birthday_month, birthday_day, {_NAME_ORDER}"
+    with get_db() as db:
+        return db.execute(
+            f"SELECT * FROM members WHERE deleted_at IS NULL ORDER BY {order}"
         ).fetchall()
 
 
@@ -464,19 +495,13 @@ def export_csv():
     writer = csv.writer(output)
     writer.writerow(["ID", "Name", "Role", "Birthday Month", "Birthday Day", "Email", "Created At", "Updated At"])
     for r in rows:
-        writer.writerow([
-            r["id"], r["name"], r["role"], r["birthday_month"], r["birthday_day"],
-            r["email"], r["created_at"], r["updated_at"],
-        ])
+        writer.writerow([r["id"], r["name"], r["role"], r["birthday_month"], r["birthday_day"],
+                         r["email"], r["created_at"], r["updated_at"]])
     data = output.getvalue().encode("utf-8")
     buf = io.BytesIO(data)
     buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name=f"birthdays_{datetime.utcnow().strftime('%Y%m%d')}.csv",
-    )
+    return send_file(buf, mimetype="text/csv", as_attachment=True,
+                     download_name=f"birthdays_{datetime.utcnow().strftime('%Y%m%d')}.csv")
 
 
 @app.get("/api/export/xlsx")
@@ -490,11 +515,8 @@ def export_xlsx():
     for cell in ws[1]:
         cell.font = cell.font.copy(bold=True)
     for r in rows:
-        ws.append([
-            r["id"], r["name"], r["role"], r["birthday_month"], r["birthday_day"],
-            r["email"], r["created_at"], r["updated_at"],
-        ])
-    # Auto-width columns (rough)
+        ws.append([r["id"], r["name"], r["role"], r["birthday_month"], r["birthday_day"],
+                   r["email"], r["created_at"], r["updated_at"]])
     for col_idx, _ in enumerate(headers, start=1):
         max_len = max(
             (len(str(ws.cell(row=row, column=col_idx).value or "")) for row in range(1, ws.max_row + 1)),
@@ -505,16 +527,19 @@ def export_xlsx():
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=f"birthdays_{datetime.utcnow().strftime('%Y%m%d')}.xlsx",
-    )
+    return send_file(buf,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True,
+                     download_name=f"birthdays_{datetime.utcnow().strftime('%Y%m%d')}.xlsx")
 
 
 @app.get("/api/backup/latest")
 def latest_backup_info():
+    if _IS_PG:
+        return jsonify({
+            "exists": False,
+            "note": "File backups disabled in PostgreSQL mode — data persists in the cloud database.",
+        })
     if not os.path.exists(LATEST_BACKUP):
         return jsonify({"exists": False})
     stat = os.stat(LATEST_BACKUP)
